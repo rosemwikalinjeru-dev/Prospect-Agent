@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "prospecting-agent"
+version = "0.1.0"
+description = "AI agent that finds HVAC/Plumbing leads via Google Places, scores them with Claude, and saves qualified leads to Google Sheets."
+requires-python = ">=3.11"
+
+[project.scripts]
+prospecting-agent = "prospecting_agent.main:app"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]

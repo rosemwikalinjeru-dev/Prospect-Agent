@@ -1,0 +1,81 @@
+# Default target cities for lead search, curated for HVAC/plumbing demand signals:
+# hot climates (heavy AC usage & replacement cycles), harsh winters (heating repairs +
+# frozen/burst-pipe plumbing emergencies), fast-growing metros (new-construction install
+# work), and older housing stock (plumbing replacement demand). Edit freely — this is a
+# starting point, not a fixed list.
+cities:
+  # --- Hot/humid climate: heavy AC usage & replacement cycles ---
+  - city: Phoenix
+    state: AZ
+  - city: Tucson
+    state: AZ
+  - city: Las Vegas
+    state: NV
+  - city: Dallas
+    state: TX
+  - city: Fort Worth
+    state: TX
+  - city: Houston
+    state: TX
+  - city: San Antonio
+    state: TX
+  - city: Austin
+    state: TX
+  - city: Tampa
+    state: FL
+  - city: Orlando
+    state: FL
+  - city: Jacksonville
+    state: FL
+  - city: Miami
+    state: FL
+  - city: New Orleans
+    state: LA
+
+  # --- Fast-growing Sun Belt metros: heavy new-construction install/service volume ---
+  - city: Charlotte
+    state: NC
+  - city: Raleigh
+    state: NC
+  - city: Atlanta
+    state: GA
+  - city: Nashville
+    state: TN
+
+  # --- Harsh winters: heating repair + frozen/burst-pipe plumbing emergencies ---
+  - city: Chicago
+    state: IL
+  - city: Minneapolis
+    state: MN
+  - city: Denver
+    state: CO
+  - city: Salt Lake City
+    state: UT
+  - city: Columbus
+    state: OH
+  - city: Indianapolis
+    state: IN
+  - city: Kansas City
+    state: MO
+  - city: Detroit
+    state: MI
+  - city: Boston
+    state: MA
+
+  # --- Older housing stock: high plumbing repair/replacement demand ---
+  - city: Philadelphia
+    state: PA
+  - city: Pittsburgh
+    state: PA
+  - city: Baltimore
+    state: MD
+  - city: St. Louis
+    state: MO
+  - city: Cleveland
+    state: OH
+
+  # --- Large mild-climate markets with aging infrastructure ---
+  - city: Seattle
+    state: WA
+  - city: Portland
+    state: OR

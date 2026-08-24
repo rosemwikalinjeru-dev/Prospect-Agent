@@ -1,0 +1,14 @@
+openai>=1.50.0
+googlemaps>=4.10.0
+apify-client>=1.7.0
+google-search-results>=2.4.2
+pyairtable>=3.0.0
+pydantic>=2.8.0
+pydantic-settings>=2.4.0
+pyyaml>=6.0.2
+tenacity>=9.0.0
+phonenumbers>=8.13.0
+typer>=0.12.0
+loguru>=0.7.2
+pytest>=8.3.0
+pytest-mock>=3.14.0

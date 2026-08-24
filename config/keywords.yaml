@@ -1,0 +1,9 @@
+# Search keywords combined with each city to form Places API text queries
+# (e.g. "HVAC repair in Dallas, TX, USA").
+keywords:
+  - "HVAC repair"
+  - "HVAC installation"
+  - "air conditioning repair"
+  - "emergency plumber"
+  - "plumbing repair"
+  - "drain cleaning service"
