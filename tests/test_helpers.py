@@ -1,6 +1,6 @@
 import pytest
 
-from prospecting_agent.utils.helpers import build_search_query, chunked, truncate
+from prospecting_agent.utils.helpers import build_search_query, categorize_keyword, chunked, truncate
 
 
 def test_build_search_query_formats_correctly():
@@ -37,3 +37,23 @@ def test_truncate_cuts_long_text_with_ellipsis():
 def test_truncate_exact_length_untouched():
     text = "a" * 50
     assert truncate(text, max_length=50) == text
+
+
+@pytest.mark.parametrize(
+    "keyword,expected",
+    [
+        ("HVAC repair", "HVAC"),
+        ("HVAC installation", "HVAC"),
+        ("air conditioning repair", "HVAC"),
+        ("emergency plumber", "Plumbing"),
+        ("plumbing repair", "Plumbing"),
+        ("drain cleaning service", "Plumbing"),
+        ("lawn mowing", "Other"),
+    ],
+)
+def test_categorize_keyword(keyword, expected):
+    assert categorize_keyword(keyword) == expected
+
+
+def test_categorize_keyword_is_case_insensitive():
+    assert categorize_keyword("EMERGENCY PLUMBER") == "Plumbing"

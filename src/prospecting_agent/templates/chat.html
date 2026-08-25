@@ -1,0 +1,423 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Prospecting Agent Chat</title>
+<style>
+  :root {
+    --bg: #f7f7f8;
+    --panel: #ffffff;
+    --border: #e0e0e5;
+    --text: #1f1f24;
+    --muted: #6b6b76;
+    --accent: #2563eb;
+    --accent-text: #ffffff;
+    --user-bubble: #2563eb;
+    --user-text: #ffffff;
+    --assistant-bubble: #f0f0f3;
+    --assistant-text: #1f1f24;
+    --warn-bg: #fff7e6;
+    --warn-border: #f0c36d;
+  }
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, "Segoe UI", system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    max-width: 720px;
+    margin: 0 auto;
+    padding: 24px 16px 120px;
+  }
+  h1 { font-size: 1.4rem; margin-bottom: 4px; }
+  .subtitle { color: var(--muted); margin-top: 0; margin-bottom: 24px; font-size: 0.95rem; }
+  #chat { display: flex; flex-direction: column; gap: 12px; margin-bottom: 16px; }
+  .msg { max-width: 85%; padding: 10px 14px; border-radius: 14px; line-height: 1.4; white-space: pre-wrap; }
+  .msg.user { align-self: flex-end; background: var(--user-bubble); color: var(--user-text); border-bottom-right-radius: 4px; }
+  .msg.assistant { align-self: flex-start; background: var(--assistant-bubble); color: var(--assistant-text); border-bottom-left-radius: 4px; }
+  .msg.error { align-self: flex-start; background: #fde8e8; color: #7a1f1f; border: 1px solid #f3b4b4; }
+  #pending-run {
+    display: none;
+    background: var(--warn-bg);
+    border: 1px solid var(--warn-border);
+    border-radius: 10px;
+    padding: 14px;
+    margin-bottom: 16px;
+  }
+  #pending-run p { margin: 0 0 10px; }
+  #pending-run button {
+    padding: 8px 14px;
+    border-radius: 8px;
+    border: none;
+    cursor: pointer;
+    font-size: 0.9rem;
+    margin-right: 8px;
+  }
+  #confirm-btn { background: var(--accent); color: var(--accent-text); }
+  #cancel-btn { background: #e5e5ea; color: var(--text); }
+  #chat-form {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    background: var(--panel);
+    border-top: 1px solid var(--border);
+    padding: 12px 16px;
+    display: flex;
+    gap: 8px;
+    max-width: 720px;
+    margin: 0 auto;
+  }
+  #chat-input {
+    flex: 1;
+    padding: 10px 14px;
+    border-radius: 20px;
+    border: 1px solid var(--border);
+    font-size: 0.95rem;
+  }
+  #send-btn {
+    padding: 10px 18px;
+    border-radius: 20px;
+    border: none;
+    background: var(--accent);
+    color: var(--accent-text);
+    cursor: pointer;
+  }
+  #send-btn:disabled { opacity: 0.5; cursor: default; }
+  .thinking { color: var(--muted); font-style: italic; }
+
+  #browse-panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px;
+    margin-bottom: 24px;
+    position: sticky;
+    top: 12px;
+    z-index: 5;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+  }
+  #browse-panel h2 { font-size: 1rem; margin: 0 0 10px; }
+  #browse-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 12px; }
+  #browse-controls label { font-size: 0.9rem; color: var(--muted); white-space: nowrap; }
+  #browse-city {
+    flex: 1;
+    min-width: 140px;
+    padding: 9px 12px;
+    border-radius: 8px;
+    border: 1.5px solid var(--accent);
+    font-size: 0.95rem;
+    background: var(--panel);
+    color: var(--text);
+  }
+  #browse-city:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .category-btn {
+    padding: 8px 14px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: var(--panel);
+    color: var(--text);
+    cursor: pointer;
+    font-size: 0.9rem;
+  }
+  .category-btn.active { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+  #browse-results { display: flex; flex-direction: column; gap: 8px; max-height: 320px; overflow-y: auto; }
+  .lead-card {
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 12px;
+    font-size: 0.88rem;
+  }
+  .lead-card .lead-name { font-weight: 600; }
+  .lead-card .lead-meta { color: var(--muted); margin-top: 2px; }
+  #browse-empty { color: var(--muted); font-size: 0.9rem; padding: 8px 0; }
+</style>
+</head>
+<body>
+  <h1>🔧 HVAC/Plumbing Prospecting Agent</h1>
+  <p class="subtitle">Ask about leads already saved, or ask me to find more — new searches need your confirmation before they run.</p>
+
+  <div id="browse-panel">
+    <h2>Browse leads</h2>
+    <div id="browse-controls">
+      <label for="browse-city">🔍 City:</label>
+      <select id="browse-city">
+        <option value="">All Cities</option>
+      </select>
+      <button class="category-btn active" data-category="">All</button>
+      <button class="category-btn" data-category="HVAC">🔥 HVAC</button>
+      <button class="category-btn" data-category="Plumbing">🔧 Plumbing</button>
+    </div>
+    <div id="browse-results"></div>
+    <div id="browse-empty" style="display:none;">No leads match those filters yet.</div>
+  </div>
+
+  <div id="chat"></div>
+
+  <div id="pending-run">
+    <p id="pending-run-text"></p>
+    <button id="confirm-btn">✅ Confirm &amp; Run</button>
+    <button id="cancel-btn">❌ Cancel</button>
+  </div>
+
+  <form id="chat-form">
+    <input type="text" id="chat-input" placeholder="Ask about your leads..." autocomplete="off">
+    <button type="submit" id="send-btn">Send</button>
+  </form>
+
+<script>
+  let history = [];
+  let pendingRun = null;
+
+  const chatEl = document.getElementById("chat");
+  const formEl = document.getElementById("chat-form");
+  const inputEl = document.getElementById("chat-input");
+  const sendBtn = document.getElementById("send-btn");
+  const pendingRunEl = document.getElementById("pending-run");
+  const pendingRunTextEl = document.getElementById("pending-run-text");
+
+  function addMessage(role, content) {
+    const div = document.createElement("div");
+    div.className = "msg " + role;
+    div.textContent = content;
+    chatEl.appendChild(div);
+    window.scrollTo(0, document.body.scrollHeight);
+    return div;
+  }
+
+  function showPendingRun(run) {
+    pendingRun = run;
+    const what = run.keyword ? ` for "${run.keyword}"` : " (all default keywords)";
+    pendingRunTextEl.textContent =
+      `Proposed search: ${run.city}, ${run.state}${what}. This calls real Apify/OpenAI APIs and typically takes a few minutes.`;
+    pendingRunEl.style.display = "block";
+    window.scrollTo(0, document.body.scrollHeight);
+  }
+
+  function hidePendingRun() {
+    pendingRun = null;
+    pendingRunEl.style.display = "none";
+  }
+
+  formEl.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const text = inputEl.value.trim();
+    if (!text) return;
+
+    inputEl.value = "";
+    sendBtn.disabled = true;
+
+    addMessage("user", text);
+    history.push({ role: "user", content: text });
+
+    const thinking = addMessage("assistant", "Thinking...");
+    thinking.classList.add("thinking");
+
+    try {
+      const resp = await fetch("/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ history }),
+      });
+      const data = await resp.json();
+
+      thinking.remove();
+
+      if (!resp.ok || data.error) {
+        addMessage("error", "Error: " + (data.error || resp.statusText));
+      } else {
+        addMessage("assistant", data.reply);
+        history.push({ role: "assistant", content: data.reply });
+        if (data.proposed_run) {
+          showPendingRun(data.proposed_run);
+        }
+      }
+    } catch (err) {
+      thinking.remove();
+      addMessage("error", "Network error: " + err.message);
+    } finally {
+      sendBtn.disabled = false;
+      inputEl.focus();
+    }
+  });
+
+  document.getElementById("confirm-btn").addEventListener("click", async () => {
+    if (!pendingRun) return;
+    const run = pendingRun;
+    hidePendingRun();
+    const thinking = addMessage("assistant", `Searching ${run.city}, ${run.state}...`);
+    thinking.classList.add("thinking");
+
+    try {
+      const resp = await fetch("/api/confirm_run", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(run),
+      });
+      const data = await resp.json();
+      thinking.remove();
+
+      if (!resp.ok || data.error) {
+        addMessage("error", "Error: " + (data.error || resp.statusText));
+      } else {
+        const msg = `Done — ${data.written} new lead(s) written to Airtable for ${run.city}, ${run.state}.`;
+        addMessage("assistant", msg);
+        history.push({ role: "assistant", content: msg });
+      }
+    } catch (err) {
+      thinking.remove();
+      addMessage("error", "Network error: " + err.message);
+    }
+  });
+
+  document.getElementById("cancel-btn").addEventListener("click", () => {
+    hidePendingRun();
+    addMessage("assistant", "Okay, cancelled — nothing was run.");
+    history.push({ role: "assistant", content: "Okay, cancelled — nothing was run." });
+  });
+
+  // --- Browse/filter panel — independent of chat, plain GET /api/leads queries ---
+  let activeCategory = "";
+  const cityStates = {}; // city name -> state, from /api/cities, used to auto-search on select
+  const cityInput = document.getElementById("browse-city");
+  const resultsEl = document.getElementById("browse-results");
+  const emptyEl = document.getElementById("browse-empty");
+  const categoryBtns = document.querySelectorAll(".category-btn");
+
+  function renderLeads(leads) {
+    resultsEl.innerHTML = "";
+
+    if (leads.length) {
+      emptyEl.style.display = "none";
+      for (const lead of leads) {
+        const card = document.createElement("div");
+        card.className = "lead-card";
+        const category = lead["Category"] || "—";
+        const score = lead["Score"] ?? "—";
+        const status = lead["Status"] || "—";
+        const phone = lead["Phone"] || "—";
+        card.innerHTML =
+          `<div class="lead-name">${lead["Name"] || "Unnamed"}</div>` +
+          `<div class="lead-meta">${lead["City"] || "—"} · ${category} · Score ${score} · ${status} · ${phone}</div>`;
+        resultsEl.appendChild(card);
+      }
+      return;
+    }
+
+    // Empty result — selecting a city now auto-triggers a real search (see
+    // cityInput's "change" handler below), so this is just a status line, not an
+    // action point. A city with no known state (ad-hoc, not on the target list)
+    // can't be auto-searched at all, so say so plainly.
+    const city = cityInput.value;
+    const state = cityStates[city];
+    if (city && !state) {
+      emptyEl.textContent = `No leads for ${city}, and its state isn't known — can't auto-search it.`;
+    } else if (city) {
+      emptyEl.textContent = `No leads yet for ${city}.`;
+    } else {
+      emptyEl.textContent = "No leads match those filters yet.";
+    }
+    emptyEl.style.display = "block";
+  }
+
+  const searchStatusEl = document.createElement("div");
+  searchStatusEl.className = "thinking";
+  searchStatusEl.style.display = "none";
+  searchStatusEl.style.marginBottom = "8px";
+  resultsEl.parentNode.insertBefore(searchStatusEl, resultsEl);
+
+  async function searchCityNow(city, state) {
+    cityInput.disabled = true;
+    categoryBtns.forEach((b) => (b.disabled = true));
+    searchStatusEl.textContent = `Searching ${city}, ${state}... this takes a few minutes.`;
+    searchStatusEl.style.display = "block";
+    try {
+      const resp = await fetch("/api/confirm_run", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ city, state }),
+      });
+      const data = await resp.json();
+      if (!resp.ok || data.error) {
+        searchStatusEl.textContent = "Error searching " + city + ": " + (data.error || resp.statusText);
+        return;
+      }
+      searchStatusEl.style.display = "none";
+      await loadCities(); // this city now has leads (or genuinely found none)
+      await refreshLeads();
+    } catch (err) {
+      searchStatusEl.textContent = "Network error: " + err.message;
+    } finally {
+      cityInput.disabled = false;
+      categoryBtns.forEach((b) => (b.disabled = false));
+    }
+  }
+
+  async function refreshLeads() {
+    const params = new URLSearchParams();
+    if (cityInput.value) params.set("city", cityInput.value);
+    if (activeCategory) params.set("category", activeCategory);
+
+    try {
+      const resp = await fetch("/api/leads?" + params.toString());
+      const data = await resp.json();
+      if (!resp.ok || data.error) {
+        emptyEl.textContent = "Error loading leads: " + (data.error || resp.statusText);
+        emptyEl.style.display = "block";
+        resultsEl.innerHTML = "";
+        return;
+      }
+      renderLeads(data.leads);
+    } catch (err) {
+      emptyEl.textContent = "Network error: " + err.message;
+      emptyEl.style.display = "block";
+      resultsEl.innerHTML = "";
+    }
+  }
+
+  categoryBtns.forEach((btn) => {
+    btn.addEventListener("click", () => {
+      categoryBtns.forEach((b) => b.classList.remove("active"));
+      btn.classList.add("active");
+      activeCategory = btn.dataset.category;
+      refreshLeads();
+    });
+  });
+
+  cityInput.addEventListener("change", async () => {
+    await refreshLeads(); // show whatever's cached immediately
+    const city = cityInput.value;
+    const state = cityStates[city];
+    if (city && state) {
+      await searchCityNow(city, state); // every city click fetches fresh leads
+    }
+  });
+
+  async function loadCities() {
+    try {
+      const resp = await fetch("/api/cities");
+      const data = await resp.json();
+      if (!resp.ok || data.error) return; // dropdown just stays at "All Cities"
+
+      const previousValue = cityInput.value;
+      while (cityInput.options.length > 1) cityInput.remove(1); // keep "All Cities"
+
+      for (const entry of data.cities) {
+        cityStates[entry.city] = entry.state;
+        const opt = document.createElement("option");
+        opt.value = entry.city;
+        opt.textContent = entry.has_leads ? entry.city : `${entry.city} (no leads yet)`;
+        cityInput.appendChild(opt);
+      }
+      cityInput.value = previousValue; // preserve selection across a reload
+    } catch (err) {
+      // Non-fatal — the dropdown still works with just "All Cities".
+    }
+  }
+
+  loadCities();
+
+  refreshLeads();
+</script>
+</body>
+</html>

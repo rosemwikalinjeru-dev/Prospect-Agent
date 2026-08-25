@@ -1,0 +1,34 @@
+services:
+  - type: web
+    name: prospecting-agent-chat
+    env: python
+    plan: free
+    buildCommand: pip install -r requirements.txt && pip install -e .
+    startCommand: gunicorn prospecting_agent.wsgi:app --bind 0.0.0.0:$PORT --timeout 300
+    envVars:
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: OPENAI_MODEL
+        value: gpt-4o
+      - key: SCRAPER_PROVIDER
+        value: apify
+      - key: APIFY_API_TOKEN
+        sync: false
+      - key: AIRTABLE_API_KEY
+        sync: false
+      - key: AIRTABLE_BASE_ID
+        sync: false
+      - key: AIRTABLE_LEADS_TABLE_NAME
+        value: Leads
+      - key: AIRTABLE_CITIES_TABLE_NAME
+        value: Cities
+      - key: MIN_LEAD_SCORE
+        value: "7"
+      - key: MAX_RESULTS_PER_SEARCH
+        value: "60"
+      - key: REQUEST_DELAY_SECONDS
+        value: "0.5"
+      - key: CITIES_PER_RUN
+        value: "5"
+      - key: LOG_LEVEL
+        value: INFO

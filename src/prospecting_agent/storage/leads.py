@@ -9,6 +9,7 @@ from pyairtable import Table
 
 from prospecting_agent.models import ScoredLead
 from prospecting_agent.storage.airtable_helpers import get_table
+from prospecting_agent.utils.helpers import categorize_keyword
 
 
 def _lead_to_fields(lead: ScoredLead) -> dict:
@@ -17,6 +18,7 @@ def _lead_to_fields(lead: ScoredLead) -> dict:
         "Phone": lead.normalized_phone or lead.phone or "",
         "Website": lead.website or "",
         "City": lead.search_city,
+        "Category": categorize_keyword(lead.search_keyword),
         "Rating": lead.rating,
         "Reviews": lead.user_ratings_total,
         "Score": lead.score,
@@ -95,6 +97,59 @@ class AirtableLeadsManager:
             if score >= min_score:
                 rows.append(fields)
         return rows
+
+    def list_cities(self) -> list[str]:
+        """Return the distinct, sorted City values across all leads — used to populate
+        the browse panel's city dropdown so it only ever offers cities that actually
+        have data, instead of a free-text box that can't guess what's been searched.
+        """
+        cities = {
+            str(record["fields"]["City"]).strip()
+            for record in self._table.all()
+            if record["fields"].get("City")
+        }
+        return sorted(cities)
+
+    def search_leads(
+        self,
+        city: str | None = None,
+        min_score: int | None = None,
+        status: str | None = None,
+        category: str | None = None,
+        limit: int = 10,
+    ) -> list[dict]:
+        """Free-form lead lookup — used by both the chat agent and the browse/filter UI.
+        All filters are optional and combine with AND. `city` and `status` match
+        case-insensitively; `city` is a substring match (so "dallas" matches "Dallas").
+        `category` matches exactly, case-insensitively (e.g. "HVAC", "Plumbing").
+        Returns up to `limit` records' fields, most-recently-added first is not
+        guaranteed (Airtable's own row order).
+        """
+        results = []
+        for record in self._table.all():
+            fields = record["fields"]
+
+            if city and city.lower() not in str(fields.get("City", "")).lower():
+                continue
+
+            if min_score is not None:
+                try:
+                    if int(fields.get("Score", 0)) < min_score:
+                        continue
+                except (TypeError, ValueError):
+                    continue
+
+            if status and str(fields.get("Status", "")).lower() != status.lower():
+                continue
+
+            if category and str(fields.get("Category", "")).lower() != category.lower():
+                continue
+
+            results.append(fields)
+            if len(results) >= limit:
+                break
+
+        return results
 
     def update_status(self, place_id: str, new_status: str) -> bool:
         """Find the record for `place_id` and update its Status field.

@@ -33,6 +33,12 @@ config/cities.yaml + config/keywords.yaml     (or --city/--state/--keyword on th
       storage/city_rotation.py     (optional, --rotate-cities) picks the next batch of
                                     cities from the Airtable "Cities" table, oldest-run first
       storage/export.py            (optional, `export` command) score>=N leads -> CSV
+
+      webapp.py + ai/chat_agent.py  (optional, `chat` command) browser chat UI, backed
+                                    by an OpenAI tool-calling loop over search_leads/
+                                    export_leads (execute immediately) and propose_run
+                                    (never executes — only a human clicking Confirm in
+                                    the UI can trigger a real scrape+score+write run)
 ```
 
 `pipeline.py` wires these stages together (`run_pipeline`); `main.py` is a thin Typer
@@ -62,10 +68,14 @@ prospecting-agent/
 │   ├── models.py                # RawBusiness / CleanedLead / ScoredLead
 │   ├── scrapers/                # maps data providers (apify, serpapi, places_api) + factory
 │   ├── processing/               # cleaner.py (dedupe/normalize), filters.py (business rules)
-│   ├── ai/openai_qualifier.py    # OpenAI scoring + outreach generation
+│   ├── ai/
+│   │   ├── openai_qualifier.py   # OpenAI scoring + outreach generation
+│   │   └── chat_agent.py         # chat tool-calling loop (search/export/propose_run)
+│   ├── webapp.py                 # Flask chat UI (`prospecting-agent chat`)
+│   ├── templates/chat.html       # chat page (vanilla HTML/CSS/JS, no build step)
 │   ├── storage/
 │   │   ├── airtable_helpers.py   # shared auth + table access + error handling
-│   │   ├── leads.py              # leads: append (deduped), read, update status
+│   │   ├── leads.py              # leads: append (deduped), read, search, update status
 │   │   ├── city_rotation.py      # "Cities" table: get_next_batch / mark_run
 │   │   └── export.py             # CSV export
 │   └── utils/                    # logger.py, helpers.py, retry.py
@@ -190,6 +200,8 @@ prospecting-agent/
 | `--min-score INT` | `7` | Only export leads at/above this score. |
 | `--output PATH` | `leads_export.csv` | CSV file to write. |
 
+`chat` takes no options — it starts a local Flask server and opens a chat page in your browser (http://127.0.0.1:5000).
+
 ### Multi-city (default)
 
 Runs every city in `config/cities.yaml` against every keyword in `config/keywords.yaml`:
@@ -274,6 +286,60 @@ Pulls from everything accumulated in Airtable so far (not just the most recent r
 ```
 prospecting-agent export --min-score 7 --output leads_export.csv
 ```
+
+### Chat interface
+
+Opens a browser chat UI:
+
+```
+prospecting-agent chat
+```
+
+Ask it things like *"how many leads do we have in Dallas?"*, *"show me the top 5 by
+score"*, or *"what's the phone number for Echols & Sons?"* — it answers by actually
+querying Airtable, not guessing. You can also ask it to find more leads, e.g. *"find
+plumbers in Miami"*: it proposes the search, and a **Confirm & Run** button appears in
+the app — nothing actually runs (no API spend, no scraping) until you click it. This
+two-step design is deliberate: a chat message alone should never be able to trigger a
+costly, multi-minute action on its own.
+
+Picking a city from the **Browse leads** dropdown is a deliberate exception to that
+two-step rule: it always kicks off a fresh real search for that city (not just a
+replay of cached leads) with no extra confirmation click — a scope decision made
+because that panel is one click away from the source of truth (the city itself),
+unlike the chat's free-text proposals.
+
+## Deploy online (Render)
+
+Running `prospecting-agent chat` only starts the app on your own machine — the page is
+only reachable while that process is running, from that computer. To get a permanent
+URL reachable from any device, deploy it to [Render](https://render.com) (free tier):
+
+1. Push this repo to GitHub if you haven't already (see `git remote -v` — it should
+   already point at your repo).
+2. Sign up at render.com (GitHub sign-in is simplest) and authorize Render's GitHub
+   App for this repo.
+3. In the Render dashboard, **New → Blueprint**, pick this repo. Render reads
+   `render.yaml` at the repo root and pre-fills the service (build/start commands,
+   plan, most env vars).
+4. Render will prompt you to fill in four secret values it can't read from the
+   repo (`render.yaml` deliberately excludes them): `OPENAI_API_KEY`,
+   `APIFY_API_TOKEN`, `AIRTABLE_API_KEY`, `AIRTABLE_BASE_ID` — copy these from your
+   local `.env`.
+5. Deploy. Render gives you a permanent URL like
+   `https://prospecting-agent-chat.onrender.com` — bookmark it, share it, open it from
+   your phone.
+
+**Free-tier tradeoffs to know about:**
+- The service spins down after ~15 minutes idle and takes ~30-60s to wake on the next
+  request — fine for personal use, but the first click after a while will feel slow.
+  Upgrade to Render's paid "Starter" plan later if that's annoying.
+- A real city search (`/api/confirm_run`, whether from chat's Confirm & Run or the
+  Browse leads dropdown) can take several minutes — the deployed server is configured
+  with a generous 300-second timeout for this, but very long searches could still be
+  affected by infrastructure limits outside this app's control. If a search seems to
+  hang or fail only when deployed (but works fine locally), that's the first thing to
+  check.
 
 ## City list
 

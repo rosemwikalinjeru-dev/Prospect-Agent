@@ -20,8 +20,12 @@ Export everything scored >= 7 (so far, across all runs) to a CSV:
 
     python -m prospecting_agent.main export --min-score 7 --output leads_export.csv
 
+Open a browser chat UI to ask questions about your leads (and propose new searches):
+
+    python -m prospecting_agent.main chat
+
 Or, after `pip install -e .`, drop the `python -m prospecting_agent.main` prefix and
-just use `prospecting-agent run ...` / `prospecting-agent export ...`.
+just use `prospecting-agent run ...` / `prospecting-agent export ...` / `prospecting-agent chat`.
 
 This module deliberately contains no pipeline logic itself — it parses CLI args,
 loads settings, sets up logging, and delegates to `pipeline.run_pipeline` (or the
@@ -175,6 +179,14 @@ def export(
         raise typer.Exit(code=1)
 
     logger.success(f"Exported {count} lead(s) with score >= {min_score} to {output}")
+
+
+@app.command()
+def chat() -> None:
+    """Open a browser chat UI to ask about your leads and propose new searches."""
+    from prospecting_agent.webapp import main as run_webapp
+
+    run_webapp()
 
 
 if __name__ == "__main__":
