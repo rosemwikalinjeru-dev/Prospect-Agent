@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ lead["Name"] if lead else "Lead not found" }} — Lead Detail</title>
+<style>
+  :root {
+    --bg: #f7f7f8;
+    --panel: #ffffff;
+    --border: #e0e0e5;
+    --text: #1f1f24;
+    --muted: #6b6b76;
+    --accent: #2563eb;
+    --accent-text: #ffffff;
+    --warn-bg: #fff7e6;
+    --warn-border: #f0c36d;
+    --bad-bg: #fde8e8;
+    --bad-text: #7a1f1f;
+    --bad-border: #f3b4b4;
+    --good-bg: #e8f8ee;
+    --good-text: #1f6b3a;
+    --good-border: #b4e6c6;
+  }
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, "Segoe UI", system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    max-width: 880px;
+    margin: 0 auto;
+    padding: 20px 16px 60px;
+  }
+  a { color: var(--accent); }
+  .back-link { display: inline-block; margin-bottom: 14px; font-size: 0.9rem; text-decoration: none; }
+  h1 { font-size: 1.5rem; margin: 0 0 4px; }
+  h2 { font-size: 1rem; margin: 0 0 10px; }
+  .subtitle { color: var(--muted); margin: 0 0 18px; }
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 16px;
+    margin-bottom: 16px;
+  }
+  .badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 10px;
+    border-radius: 999px;
+    font-size: 0.78rem;
+    font-weight: 600;
+    border: 1px solid var(--border);
+    background: var(--bg);
+    margin-right: 6px;
+  }
+  .badge.warn { background: var(--warn-bg); border-color: var(--warn-border); color: #8a5a00; }
+  .badge.bad { background: var(--bad-bg); border-color: var(--bad-border); color: var(--bad-text); }
+  .badge.good { background: var(--good-bg); border-color: var(--good-border); color: var(--good-text); }
+  .badges { margin-bottom: 14px; }
+  .kv { display: grid; grid-template-columns: 160px 1fr; gap: 8px 12px; font-size: 0.92rem; }
+  .kv dt { color: var(--muted); }
+  .kv dd { margin: 0; word-break: break-word; }
+  .score-row { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; font-size: 0.88rem; }
+  .score-row .label { width: 170px; color: var(--muted); flex-shrink: 0; }
+  .score-row .bar-track { flex: 1; height: 8px; border-radius: 4px; background: var(--bg); overflow: hidden; }
+  .score-row .bar-fill { height: 100%; background: var(--accent); }
+  .score-row .value { width: 60px; text-align: right; flex-shrink: 0; }
+  .overall-score { font-size: 2rem; font-weight: 700; }
+  .overall-score .of10 { font-size: 1rem; color: var(--muted); font-weight: 400; }
+  .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 6px; }
+  .actions a, .actions button {
+    padding: 8px 14px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: var(--panel);
+    color: var(--text);
+    text-decoration: none;
+    font-size: 0.88rem;
+    cursor: pointer;
+  }
+  .actions .primary { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+  .field { margin-bottom: 12px; }
+  .field label { display: block; font-size: 0.85rem; color: var(--muted); margin-bottom: 4px; }
+  .field select, .field input, .field textarea {
+    width: 100%;
+    padding: 8px 10px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    font-size: 0.92rem;
+    font-family: inherit;
+  }
+  .field textarea { min-height: 70px; resize: vertical; }
+  .save-row { display: flex; align-items: center; gap: 10px; }
+  #save-btn { background: var(--accent); color: var(--accent-text); border: none; padding: 9px 18px; border-radius: 8px; cursor: pointer; font-size: 0.9rem; }
+  #save-status { font-size: 0.85rem; color: var(--muted); }
+  .message-block { background: var(--bg); border-radius: 8px; padding: 12px; font-size: 0.9rem; white-space: pre-wrap; margin-top: 6px; }
+  .pain-points { margin: 6px 0 0; padding-left: 18px; font-size: 0.9rem; }
+</style>
+</head>
+<body>
+<a class="back-link" href="/">&larr; Back to browse</a>
+
+{% if lead is none %}
+  <div class="panel">
+    <h1>Lead not found</h1>
+    <p class="subtitle">{{ error }} (Place ID: {{ place_id }})</p>
+  </div>
+{% else %}
+  {% set website = lead.get("Website") %}
+  {% set rating = lead.get("Rating") %}
+  {% set reviews = lead.get("Reviews") %}
+  {% set closed = lead.get("Business Status") and lead.get("Business Status") != "OPERATIONAL" %}
+  {% set dup_risk = lead.get("Duplicate Risk", "Low") %}
+
+  <h1>{{ lead.get("Name", "Unnamed") }}</h1>
+  <p class="subtitle">{{ lead.get("Category", "—") }} · {{ lead.get("City", "—") }}</p>
+
+  <div class="badges">
+    <span class="badge">{{ lead.get("Category", "—") }}</span>
+    <span class="badge">{{ lead.get("Status", "New") }}</span>
+    {% if dup_risk == "Medium" %}<span class="badge warn">⚠ Duplicate risk: Medium</span>{% endif %}
+    {% if closed %}<span class="badge bad">Appears closed</span>{% endif %}
+    {% if not website %}<span class="badge warn">No website</span>{% endif %}
+    {% if lead.get("Last Verified") %}<span class="badge good">Verified {{ lead.get("Last Verified") }}</span>{% endif %}
+  </div>
+
+  <div class="panel">
+    <h2>Score</h2>
+    <div class="overall-score">{{ lead.get("Score", "—") }} <span class="of10">/ 10</span></div>
+    <div style="margin-top:12px;">
+      {% set factors = [
+        ("Service-need signal (AI)", "Service Need Score", 40),
+        ("Website opportunity", "Website Opportunity Score", 25),
+        ("Review profile", "Review Profile Score", 20),
+        ("Contactability", "Contactability Score", 10),
+        ("Business activity", "Business Activity Score", 5),
+      ] %}
+      {% for label, field, weight in factors %}
+        {% set val = lead.get(field) %}
+        <div class="score-row">
+          <span class="label">{{ label }} ({{ weight }}%)</span>
+          <span class="bar-track"><span class="bar-fill" style="width: {{ ((val or 0) / 10 * 100) | round | int }}%;"></span></span>
+          <span class="value">{{ "%.1f"|format(val) if val is not none else "—" }} / 10</span>
+        </div>
+      {% endfor %}
+    </div>
+    {% if lead.get("Reason") %}<p style="margin-top:10px; font-size:0.9rem; color:var(--muted);">{{ lead.get("Reason") }}</p>{% endif %}
+  </div>
+
+  <div class="panel">
+    <h2>Business overview</h2>
+    <dl class="kv">
+      <dt>Address</dt><dd>{{ lead.get("Address") or "—" }}</dd>
+      <dt>Phone</dt><dd>{{ lead.get("Phone") or "—" }}</dd>
+      <dt>Website</dt><dd>{% if website %}<a href="{{ website }}" target="_blank" rel="noopener">{{ website }}</a>{% else %}Not listed{% endif %}</dd>
+      <dt>Google Maps</dt><dd>{% if lead.get("Google Maps URL") %}<a href="{{ lead.get('Google Maps URL') }}" target="_blank" rel="noopener">Open listing</a>{% else %}—{% endif %}</dd>
+      <dt>Hours</dt><dd>{{ lead.get("Opening Hours") or "Not listed" }}</dd>
+      <dt>Rating</dt><dd>{% if rating %}{{ rating }} stars ({{ reviews or 0 }} reviews){% else %}No rating{% endif %}</dd>
+      <dt>Business status</dt><dd>{{ lead.get("Business Status") or "Unknown" }}</dd>
+      <dt>Source</dt><dd>{{ lead.get("Source") or "—" }}</dd>
+      <dt>Date added</dt><dd>{{ lead.get("Date Added") or "—" }}</dd>
+      <dt>Last verified</dt><dd>{{ lead.get("Last Verified") or "—" }}</dd>
+    </dl>
+  </div>
+
+  <div class="panel">
+    <h2>Prospecting signals</h2>
+    <div class="badges" style="margin-bottom:0;">
+      {% if not website %}<span class="badge warn">Missing website</span>{% endif %}
+      {% if rating and rating < 4.0 %}<span class="badge warn">Below-average rating</span>{% endif %}
+      {% if not reviews or reviews < 10 %}<span class="badge warn">Low review count</span>{% endif %}
+      {% if closed %}<span class="badge bad">Appears closed</span>{% endif %}
+      {% if website and rating and rating >= 4.0 and reviews and reviews >= 10 and not closed %}<span class="badge good">No major red flags detected</span>{% endif %}
+    </div>
+    {% if lead.get("Pain Points") %}
+      <p style="margin-top:12px; margin-bottom: 4px; font-size:0.85rem; color:var(--muted);">Data-grounded signals:</p>
+      <ul class="pain-points">
+        {% for point in lead.get("Pain Points").split("; ") %}<li>{{ point }}</li>{% endfor %}
+      </ul>
+    {% endif %}
+  </div>
+
+  <div class="panel">
+    <h2>Suggested pitch</h2>
+    {% if lead.get("Recommended Offer") %}<p><strong>Angle:</strong> {{ lead.get("Recommended Offer") }}</p>{% endif %}
+    {% if lead.get("Personalized First Line") %}<p><strong>Opening line:</strong> {{ lead.get("Personalized First Line") }}</p>{% endif %}
+    {% if lead.get("Personalized Message") %}
+      <p style="margin-bottom:4px;"><strong>Full message:</strong></p>
+      <div class="message-block">{{ lead.get("Personalized Message") }}</div>
+    {% endif %}
+  </div>
+
+  <div class="panel">
+    <h2>Outreach workspace</h2>
+    <div class="actions">
+      {% if lead.get("Phone") %}<a class="primary" href="tel:{{ lead.get('Phone') }}">📞 Call</a>
+      <button type="button" id="copy-phone-btn" data-phone="{{ lead.get('Phone') }}">📋 Copy phone</button>{% endif %}
+      {% if website %}<a href="{{ website }}" target="_blank" rel="noopener">🌐 Open website</a>{% endif %}
+      {% if lead.get("Google Maps URL") %}<a href="{{ lead.get('Google Maps URL') }}" target="_blank" rel="noopener">📍 Open map listing</a>{% endif %}
+    </div>
+
+    <form id="workspace-form">
+      <div class="field">
+        <label for="status">Status</label>
+        <select id="status" name="Status">
+          {% for choice in status_pipeline %}
+            <option value="{{ choice }}" {% if lead.get("Status") == choice %}selected{% endif %}>{{ choice }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="field">
+        <label for="owner">Owner</label>
+        <input type="text" id="owner" name="Owner" value="{{ lead.get('Owner', '') }}" placeholder="Who's working this lead">
+      </div>
+      <div class="field">
+        <label for="call_outcome">Last call outcome</label>
+        <input type="text" id="call_outcome" name="Call Outcome" value="{{ lead.get('Call Outcome', '') }}" placeholder="e.g. Left voicemail, Not interested, Booked">
+      </div>
+      <div class="field">
+        <label for="follow_up">Follow-up date</label>
+        <input type="date" id="follow_up" name="Follow Up Date" value="{{ lead.get('Follow Up Date', '') }}">
+      </div>
+      <div class="field">
+        <label for="notes">Notes</label>
+        <textarea id="notes" name="Notes" placeholder="Call notes, context, anything worth remembering">{{ lead.get("Notes", "") }}</textarea>
+      </div>
+      <div class="save-row">
+        <button type="submit" id="save-btn">Save</button>
+        <span id="save-status"></span>
+      </div>
+    </form>
+  </div>
+
+<script>
+  const copyBtn = document.getElementById("copy-phone-btn");
+  if (copyBtn) {
+    copyBtn.addEventListener("click", async () => {
+      try {
+        await navigator.clipboard.writeText(copyBtn.dataset.phone);
+        copyBtn.textContent = "✅ Copied";
+        setTimeout(() => (copyBtn.textContent = "📋 Copy phone"), 1500);
+      } catch (err) {
+        copyBtn.textContent = "Couldn't copy";
+      }
+    });
+  }
+
+  const form = document.getElementById("workspace-form");
+  const saveStatus = document.getElementById("save-status");
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const fields = Object.fromEntries(new FormData(form).entries());
+    saveStatus.textContent = "Saving...";
+    try {
+      const resp = await fetch("/api/leads/{{ place_id }}", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(fields),
+      });
+      const data = await resp.json();
+      saveStatus.textContent = (!resp.ok || data.error) ? "Error: " + (data.error || resp.statusText) : "Saved.";
+    } catch (err) {
+      saveStatus.textContent = "Network error: " + err.message;
+    }
+  });
+</script>
+{% endif %}
+</body>
+</html>

@@ -121,15 +121,47 @@
     font-size: 0.9rem;
   }
   .category-btn.active { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
-  #browse-results { display: flex; flex-direction: column; gap: 8px; max-height: 320px; overflow-y: auto; }
+  .filter-select {
+    padding: 8px 10px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    font-size: 0.88rem;
+    background: var(--panel);
+    color: var(--text);
+  }
+  #min-rating {
+    width: 70px;
+    padding: 8px 10px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    font-size: 0.88rem;
+  }
+  #browse-count { font-size: 0.85rem; color: var(--muted); margin-bottom: 8px; }
+  #browse-results { display: flex; flex-direction: column; gap: 8px; max-height: 420px; overflow-y: auto; }
   .lead-card {
+    display: block;
     border: 1px solid var(--border);
     border-radius: 8px;
     padding: 10px 12px;
     font-size: 0.88rem;
+    text-decoration: none;
+    color: var(--text);
   }
+  .lead-card:hover { border-color: var(--accent); }
   .lead-card .lead-name { font-weight: 600; }
   .lead-card .lead-meta { color: var(--muted); margin-top: 2px; }
+  .lead-card .lead-badges { margin-top: 6px; }
+  .badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 999px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    border: 1px solid var(--border);
+    background: var(--bg);
+    margin-right: 4px;
+  }
+  .badge.warn { background: var(--warn-bg); border-color: var(--warn-border); color: #8a5a00; }
   #browse-empty { color: var(--muted); font-size: 0.9rem; padding: 8px 0; }
 </style>
 </head>
@@ -147,7 +179,36 @@
       <button class="category-btn active" data-category="">All</button>
       <button class="category-btn" data-category="HVAC">🔥 HVAC</button>
       <button class="category-btn" data-category="Plumbing">🔧 Plumbing</button>
+
+      <select id="browse-status" class="filter-select">
+        <option value="">Any status</option>
+        <option value="New">New</option>
+        <option value="Reviewed">Reviewed</option>
+        <option value="Contacted">Contacted</option>
+        <option value="Follow-up">Follow-up</option>
+        <option value="Qualified">Qualified</option>
+        <option value="Won">Won</option>
+        <option value="Not a fit">Not a fit</option>
+      </select>
+
+      <select id="browse-has-website" class="filter-select">
+        <option value="">Website: any</option>
+        <option value="false">No website</option>
+        <option value="true">Has website</option>
+      </select>
+
+      <label for="min-rating">Min rating:</label>
+      <input type="number" id="min-rating" min="0" max="5" step="0.1" placeholder="any">
+
+      <select id="browse-sort" class="filter-select">
+        <option value="">Sort: default</option>
+        <option value="score">Score</option>
+        <option value="rating">Rating</option>
+        <option value="newest">Newest</option>
+        <option value="last_verified">Last verified</option>
+      </select>
     </div>
+    <div id="browse-count"></div>
     <div id="browse-results"></div>
     <div id="browse-empty" style="display:none;">No leads match those filters yet.</div>
   </div>
@@ -187,11 +248,33 @@
 
   function showPendingRun(run) {
     pendingRun = run;
-    const what = run.keyword ? ` for "${run.keyword}"` : " (all default keywords)";
+    const what = run.keyword ? `"${run.keyword}"` : "all default keywords (HVAC + Plumbing)";
+    const estimate = run.estimated_results
+      ? ` Estimated up to ~${run.estimated_results} businesses will be checked.`
+      : "";
+    const source = run.data_source ? ` Data source: ${run.data_source}.` : "";
     pendingRunTextEl.textContent =
-      `Proposed search: ${run.city}, ${run.state}${what}. This calls real Apify/OpenAI APIs and typically takes a few minutes.`;
+      `Proposed search: ${run.city}, ${run.state} — ${what}.${estimate}${source} This calls real ` +
+      `Apify/OpenAI APIs and typically takes a few minutes. Run search?`;
     pendingRunEl.style.display = "block";
     window.scrollTo(0, document.body.scrollHeight);
+  }
+
+  // Polls /api/run_status/<jobId> until the job finishes; calls onUpdate(job) on every
+  // poll so the caller can show live progress, and resolves with the final job state.
+  async function pollJob(jobId, onUpdate) {
+    while (true) {
+      const resp = await fetch(`/api/run_status/${jobId}`);
+      const job = await resp.json();
+      if (!resp.ok) {
+        return { status: "error", error: job.error || resp.statusText };
+      }
+      onUpdate(job);
+      if (job.status === "done" || job.status === "error") {
+        return job;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+    }
   }
 
   function hidePendingRun() {
@@ -245,7 +328,7 @@
     if (!pendingRun) return;
     const run = pendingRun;
     hidePendingRun();
-    const thinking = addMessage("assistant", `Searching ${run.city}, ${run.state}...`);
+    const thinking = addMessage("assistant", `Starting search for ${run.city}, ${run.state}...`);
     thinking.classList.add("thinking");
 
     try {
@@ -255,14 +338,26 @@
         body: JSON.stringify(run),
       });
       const data = await resp.json();
-      thinking.remove();
 
-      if (!resp.ok || data.error) {
+      if (!resp.ok || data.error || !data.job_id) {
+        thinking.remove();
         addMessage("error", "Error: " + (data.error || resp.statusText));
+        return;
+      }
+
+      const job = await pollJob(data.job_id, (j) => {
+        thinking.textContent = j.stage_label ? `${j.stage_label}...` : "Working...";
+      });
+
+      thinking.remove();
+      if (job.status === "error") {
+        addMessage("error", "Error: " + job.error);
       } else {
-        const msg = `Done — ${data.written} new lead(s) written to Airtable for ${run.city}, ${run.state}.`;
+        const msg = `Done — ${job.written} new lead(s) written to Airtable for ${run.city}, ${run.state}.`;
         addMessage("assistant", msg);
         history.push({ role: "assistant", content: msg });
+        await loadCities();
+        await refreshLeads();
       }
     } catch (err) {
       thinking.remove();
@@ -280,25 +375,46 @@
   let activeCategory = "";
   const cityStates = {}; // city name -> state, from /api/cities, used to auto-search on select
   const cityInput = document.getElementById("browse-city");
+  const statusInput = document.getElementById("browse-status");
+  const hasWebsiteInput = document.getElementById("browse-has-website");
+  const minRatingInput = document.getElementById("min-rating");
+  const sortInput = document.getElementById("browse-sort");
   const resultsEl = document.getElementById("browse-results");
   const emptyEl = document.getElementById("browse-empty");
+  const countEl = document.getElementById("browse-count");
   const categoryBtns = document.querySelectorAll(".category-btn");
 
-  function renderLeads(leads) {
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  }
+
+  function renderLeads(leads, total) {
     resultsEl.innerHTML = "";
+    countEl.textContent = total ? `${total} lead${total === 1 ? "" : "s"}` : "";
 
     if (leads.length) {
       emptyEl.style.display = "none";
       for (const lead of leads) {
-        const card = document.createElement("div");
+        const card = document.createElement("a");
         card.className = "lead-card";
+        card.href = `/leads/${encodeURIComponent(lead["Place ID"] || "")}`;
         const category = lead["Category"] || "—";
         const score = lead["Score"] ?? "—";
         const status = lead["Status"] || "—";
         const phone = lead["Phone"] || "—";
+        const rating = lead["Rating"];
+        const reviews = lead["Reviews"] || 0;
+        const ratingText = rating ? `${rating}★ (${reviews})` : "no rating";
+
+        const badges = [];
+        if (!lead["Website"]) badges.push('<span class="badge warn">No website</span>');
+        if (lead["Duplicate Risk"] === "Medium") badges.push('<span class="badge warn">Dup risk</span>');
+        if (lead["Business Status"] && lead["Business Status"] !== "OPERATIONAL") badges.push('<span class="badge warn">Closed?</span>');
+
         card.innerHTML =
-          `<div class="lead-name">${lead["Name"] || "Unnamed"}</div>` +
-          `<div class="lead-meta">${lead["City"] || "—"} · ${category} · Score ${score} · ${status} · ${phone}</div>`;
+          `<div class="lead-name">${escapeHtml(lead["Name"] || "Unnamed")}</div>` +
+          `<div class="lead-meta">${escapeHtml(lead["City"] || "—")} · ${escapeHtml(category)} · Score ${score} · ${ratingText} · ${escapeHtml(status)} · ${escapeHtml(phone)}</div>` +
+          (badges.length ? `<div class="lead-badges">${badges.join("")}</div>` : "");
         resultsEl.appendChild(card);
       }
       return;
@@ -329,7 +445,7 @@
   async function searchCityNow(city, state) {
     cityInput.disabled = true;
     categoryBtns.forEach((b) => (b.disabled = true));
-    searchStatusEl.textContent = `Searching ${city}, ${state}... this takes a few minutes.`;
+    searchStatusEl.textContent = `Searching ${city}, ${state}...`;
     searchStatusEl.style.display = "block";
     try {
       const resp = await fetch("/api/confirm_run", {
@@ -338,8 +454,17 @@
         body: JSON.stringify({ city, state }),
       });
       const data = await resp.json();
-      if (!resp.ok || data.error) {
+      if (!resp.ok || data.error || !data.job_id) {
         searchStatusEl.textContent = "Error searching " + city + ": " + (data.error || resp.statusText);
+        return;
+      }
+
+      const job = await pollJob(data.job_id, (j) => {
+        searchStatusEl.textContent = `${j.stage_label || "Working"}...`;
+      });
+
+      if (job.status === "error") {
+        searchStatusEl.textContent = "Error searching " + city + ": " + job.error;
         return;
       }
       searchStatusEl.style.display = "none";
@@ -357,6 +482,11 @@
     const params = new URLSearchParams();
     if (cityInput.value) params.set("city", cityInput.value);
     if (activeCategory) params.set("category", activeCategory);
+    if (statusInput.value) params.set("status", statusInput.value);
+    if (hasWebsiteInput.value) params.set("has_website", hasWebsiteInput.value);
+    if (minRatingInput.value) params.set("min_rating", minRatingInput.value);
+    if (sortInput.value) params.set("sort", sortInput.value);
+    params.set("limit", "50");
 
     try {
       const resp = await fetch("/api/leads?" + params.toString());
@@ -365,13 +495,15 @@
         emptyEl.textContent = "Error loading leads: " + (data.error || resp.statusText);
         emptyEl.style.display = "block";
         resultsEl.innerHTML = "";
+        countEl.textContent = "";
         return;
       }
-      renderLeads(data.leads);
+      renderLeads(data.leads, data.total);
     } catch (err) {
       emptyEl.textContent = "Network error: " + err.message;
       emptyEl.style.display = "block";
       resultsEl.innerHTML = "";
+      countEl.textContent = "";
     }
   }
 
@@ -383,6 +515,9 @@
       refreshLeads();
     });
   });
+
+  [statusInput, hasWebsiteInput, sortInput].forEach((el) => el.addEventListener("change", refreshLeads));
+  minRatingInput.addEventListener("change", refreshLeads);
 
   cityInput.addEventListener("change", async () => {
     await refreshLeads(); // show whatever's cached immediately

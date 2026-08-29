@@ -6,6 +6,7 @@ test, or scheduler without going through Typer at all.
 """
 
 from pathlib import Path
+from typing import Callable, Optional
 
 import yaml
 from loguru import logger
@@ -47,12 +48,23 @@ def run_pipeline(
     cities: list[dict],
     keywords: list[str],
     dry_run: bool = False,
+    on_progress: Optional[Callable[[str], None]] = None,
 ) -> int:
     """Run the full pipeline end to end over an already-loaded (cities, keywords) grid.
 
-    Returns the number of leads written to Airtable (or, in a dry run, the number
-    that would have been written).
+    `on_progress`, if given, is called with a stage name ("finding", "deduping",
+    "verifying", "scoring", "saving") as each stage starts — used by the webapp's async
+    job runner to show real progress; unused (and harmless to omit) from the CLI.
+
+    Returns the number of *new* leads written to Airtable (or, in a dry run, the number
+    that would have been written) — existing leads refreshed by this run are logged but
+    not counted here, to keep this return value's meaning unchanged for the CLI.
     """
+
+    def _progress(stage: str) -> None:
+        if on_progress is not None:
+            on_progress(stage)
+
     total_searches = len(cities) * len(keywords)
     logger.info(f"Search grid: {len(cities)} cities x {len(keywords)} keywords = {total_searches} searches")
 
@@ -79,6 +91,7 @@ def run_pipeline(
     # Rate limiting between individual requests happens inside the scraper implementation
     # (settings.request_delay_seconds); here we just make sure one bad city/keyword pair
     # can't take down the whole run.
+    _progress("finding")
     raw_businesses: list[RawBusiness] = []
     for city in cities:
         for keyword in keywords:
@@ -92,7 +105,9 @@ def run_pipeline(
         return 0
 
     # --- Clean + filter stages ---
+    _progress("deduping")
     cleaned = clean_businesses(raw_businesses)
+    _progress("verifying")
     qualifying = filter_leads(cleaned)
 
     if not qualifying:
@@ -100,11 +115,16 @@ def run_pipeline(
         return 0
 
     # --- Score stage (each call costs money — only runs on filtered leads) ---
+    _progress("scoring")
     scored = score_leads(qualifying, qualifier, settings.min_lead_score)
 
     # --- Write stage ---
+    _progress("saving")
     if dry_run:
         _print_dry_run_summary(scored)
         return len(scored)
 
-    return leads_manager.append_new_leads(scored)
+    new_count, refreshed_count = leads_manager.append_new_leads(scored)
+    if refreshed_count:
+        logger.info(f"Also refreshed {refreshed_count} already-known lead(s)")
+    return new_count

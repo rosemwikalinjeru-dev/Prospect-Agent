@@ -13,9 +13,9 @@ class _FakeQualifier:
         return self._results[lead.name]
 
 
-def _fake_result(score: int) -> dict:
+def _fake_result(service_need_score: int) -> dict:
     return {
-        "score": score,
+        "service_need_score": service_need_score,
         "reason": "test reason",
         "pain_points": ["no website listed", "low review count"],
         "recommended_offer": "a free Missed Call Revenue Audit",
@@ -36,7 +36,8 @@ def test_score_leads_keeps_only_leads_at_or_above_threshold(make_cleaned_lead):
     scored = score_leads(leads, qualifier, min_score=7)
 
     assert [lead.name for lead in scored] == ["High Scorer"]
-    assert scored[0].score == 9
+    assert scored[0].service_need_score == 9
+    assert 1 <= scored[0].score <= 10
     assert scored[0].pain_points == ["no website listed", "low review count"]
     assert scored[0].full_outreach_message.startswith("Hi there")
 
@@ -60,7 +61,7 @@ def test_score_leads_skips_malformed_result_without_crashing_the_batch(make_clea
     ]
     qualifier = _FakeQualifier(
         {
-            "Malformed Result": {"score": 9},  # missing reason/pain_points/etc.
+            "Malformed Result": {"service_need_score": 9},  # missing reason/pain_points/etc.
             "Good Result": _fake_result(9),
         }
     )

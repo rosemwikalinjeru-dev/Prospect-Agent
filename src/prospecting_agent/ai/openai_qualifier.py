@@ -13,6 +13,14 @@ from loguru import logger
 
 from prospecting_agent.models import CleanedLead, ScoredLead
 from prospecting_agent.utils.retry import with_retry
+from prospecting_agent.utils.scoring import (
+    DEFAULT_WEIGHTS,
+    business_activity_score,
+    compute_weighted_score,
+    contactability_score,
+    review_profile_score,
+    website_opportunity_score,
+)
 
 # --- System prompt -----------------------------------------------------------------
 
@@ -22,18 +30,17 @@ no-obligation review that shows an owner roughly how many inbound calls their bu
 likely missing each month, and what that's probably costing them in booked jobs.
 
 You will be given structured data about one business, pulled from Google Maps. Your job is \
-to decide, from that data alone, how good a candidate this business is for the audit offer, \
-and to draft an outreach message a real person could send as-is, with no editing.
+to judge one specific thing from that data — how strongly this business's overall situation \
+suggests they'd benefit from the audit offer — and to draft an outreach message a real \
+person could send as-is, with no editing. (Website presence, review profile, contactability, \
+and business activity are scored separately, outside your judgment — focus purely on the \
+holistic "does this business's situation suggest missed calls" read.)
 
-HOW TO SCORE (1-10):
-Score high when the data shows signals of a business that is plausibly missing calls or \
-under-resourced for its call volume: no website, or a website that adds no real information; \
-a low review count for how established the business seems; no listed hours; a rating in the \
-3.5-4.3 range (good enough to be busy, not so polished that their operations are clearly \
-dialed in already); a business status that suggests instability. Score low when the business \
-looks well-resourced and responsive: a strong review count and rating together, a real \
-website, and complete listing information — these cut against the "missing calls" story, so \
-don't inflate the score just because a business is a plausible-sounding HVAC/plumbing company.
+HOW TO SCORE service_need_score (1-10):
+Score high when the business's overall profile (category, how established it seems, hours,
+status) suggests it's plausibly missing calls or under-resourced for its call volume. Score \
+low when the business looks well-resourced and clearly dialed in operationally. Don't inflate \
+the score just because a business is a plausible-sounding HVAC/plumbing company.
 
 HOW TO WRITE — this is the part most cold outreach gets wrong:
 Write like a person who actually looked at this specific business, not a marketing template \
@@ -64,9 +71,12 @@ LEAD_EVALUATION_SCHEMA = {
         "schema": {
             "type": "object",
             "properties": {
-                "score": {
+                "service_need_score": {
                     "type": "integer",
-                    "description": "1-10: how promising this business is for the Missed Call Revenue Audit offer.",
+                    "description": (
+                        "1-10: how strongly this business's overall situation suggests they'd "
+                        "benefit from the Missed Call Revenue Audit offer."
+                    ),
                 },
                 "reason": {
                     "type": "string",
@@ -106,7 +116,7 @@ LEAD_EVALUATION_SCHEMA = {
                 },
             },
             "required": [
-                "score",
+                "service_need_score",
                 "reason",
                 "pain_points",
                 "recommended_offer",
@@ -170,7 +180,10 @@ class OpenAIQualifier:
 
 
 def score_leads(leads: list[CleanedLead], qualifier: OpenAIQualifier, min_score: int) -> list[ScoredLead]:
-    """Score every lead with OpenAI; keep only those at/above `min_score`.
+    """Score every lead: OpenAI judges `service_need_score`, the other four factors are
+    computed deterministically from data already on the lead (see utils/scoring.py),
+    then blended into the single `score` used for filtering/display. Keep only those
+    at/above `min_score`.
 
     A single lead failing to score (API error, malformed response) is logged and
     skipped rather than aborting the whole batch.
@@ -180,8 +193,29 @@ def score_leads(leads: list[CleanedLead], qualifier: OpenAIQualifier, min_score:
     for lead in leads:
         try:
             result = qualifier.evaluate(lead)
-            passed = result["score"] >= min_score
-            lead_result = ScoredLead(**lead.model_dump(), **result) if passed else None
+            sub_scores = {
+                "service_need_score": float(result["service_need_score"]),
+                "website_opportunity_score": website_opportunity_score(lead),
+                "review_profile_score": review_profile_score(lead),
+                "contactability_score": contactability_score(lead),
+                "business_activity_score": business_activity_score(lead),
+            }
+            weighted_score = compute_weighted_score(sub_scores, DEFAULT_WEIGHTS)
+            passed = weighted_score >= min_score
+            lead_result = (
+                ScoredLead(
+                    **lead.model_dump(),
+                    score=weighted_score,
+                    **sub_scores,
+                    reason=result["reason"],
+                    pain_points=result["pain_points"],
+                    recommended_offer=result["recommended_offer"],
+                    personalized_first_line=result["personalized_first_line"],
+                    full_outreach_message=result["full_outreach_message"],
+                )
+                if passed
+                else None
+            )
         except Exception as exc:
             # Covers both API failures (evaluate() raising) and a malformed/incomplete
             # result shape (KeyError, or ScoredLead's own validation) — either way, one
@@ -192,7 +226,7 @@ def score_leads(leads: list[CleanedLead], qualifier: OpenAIQualifier, min_score:
         if lead_result is not None:
             scored.append(lead_result)
         else:
-            logger.debug(f"'{lead.name}' scored {result['score']} < {min_score}, dropping")
+            logger.debug(f"'{lead.name}' scored {weighted_score} < {min_score}, dropping")
 
     logger.info(f"Scored {len(leads)} leads, {len(scored)} qualified at >= {min_score}")
     return scored

@@ -60,6 +60,7 @@ def _item_to_business(item: dict, city: str, keyword: str) -> RawBusiness | None
         business_status=_business_status(item),
         types=categories,
         opening_hours=_opening_hours(item),
+        google_maps_url=item.get("url"),
         search_city=city,
         search_keyword=keyword,
         source="apify",

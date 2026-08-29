@@ -27,19 +27,26 @@ config/cities.yaml + config/keywords.yaml     (or --city/--state/--keyword on th
         (system prompt, structured-output schema, client call, batch loop all in one file)
               │  (ScoredLead, >= MIN_LEAD_SCORE)
               ▼
-      storage/leads.py             dedupe by place_id/phone, append new leads to Airtable
-        (also supports update_status() for later follow-up)
+      storage/leads.py             place_id/phone match -> refresh scraped fields in place;
+                                    otherwise append as new (see "Deduplication" below)
 
       storage/city_rotation.py     (optional, --rotate-cities) picks the next batch of
                                     cities from the Airtable "Cities" table, oldest-run first
       storage/export.py            (optional, `export` command) score>=N leads -> CSV
 
-      webapp.py + ai/chat_agent.py  (optional, `chat` command) browser chat UI, backed
-                                    by an OpenAI tool-calling loop over search_leads/
-                                    export_leads (execute immediately) and propose_run
-                                    (never executes — only a human clicking Confirm in
-                                    the UI can trigger a real scrape+score+write run)
+      webapp.py + ai/chat_agent.py  (optional, `chat` command) browser chat UI: a browse/
+                                    filter panel, a lead-detail page per business, and a
+                                    chat backed by an OpenAI tool-calling loop over
+                                    search_leads/export_leads (execute immediately) and
+                                    propose_run (never executes — only a human clicking
+                                    Confirm in the UI can trigger a real run). Real runs
+                                    execute as a background job (jobs.py) so the UI can
+                                    show live progress instead of blocking one request.
 ```
+
+`utils/scoring.py` computes four of the five factors behind each lead's score deterministically
+(website presence, review profile, contactability, business activity) — only the fifth,
+`service_need_score`, comes from OpenAI. See "Scoring" below.
 
 `pipeline.py` wires these stages together (`run_pipeline`); `main.py` is a thin Typer
 CLI that loads settings, sets up logging, resolves the city/keyword grid, and calls
@@ -69,16 +76,21 @@ prospecting-agent/
 │   ├── scrapers/                # maps data providers (apify, serpapi, places_api) + factory
 │   ├── processing/               # cleaner.py (dedupe/normalize), filters.py (business rules)
 │   ├── ai/
-│   │   ├── openai_qualifier.py   # OpenAI scoring + outreach generation
+│   │   ├── openai_qualifier.py   # OpenAI scoring (service_need_score) + outreach generation
 │   │   └── chat_agent.py         # chat tool-calling loop (search/export/propose_run)
-│   ├── webapp.py                 # Flask chat UI (`prospecting-agent chat`)
-│   ├── templates/chat.html       # chat page (vanilla HTML/CSS/JS, no build step)
+│   ├── jobs.py                    # thread-safe in-memory store backing async search jobs
+│   ├── webapp.py                  # Flask app (`prospecting-agent chat`): chat, browse/filter,
+│   │                              #   lead detail, async /api/confirm_run + /api/run_status
+│   ├── wsgi.py                    # production entry point (gunicorn), see "Deploy online"
+│   ├── templates/
+│   │   ├── chat.html             # chat + browse/filter page (vanilla HTML/CSS/JS)
+│   │   └── lead_detail.html      # one lead's full profile + outreach workspace
 │   ├── storage/
 │   │   ├── airtable_helpers.py   # shared auth + table access + error handling
-│   │   ├── leads.py              # leads: append (deduped), read, search, update status
+│   │   ├── leads.py              # leads: append/refresh (deduped), read, search, get/update
 │   │   ├── city_rotation.py      # "Cities" table: get_next_batch / mark_run
 │   │   └── export.py             # CSV export
-│   └── utils/                    # logger.py, helpers.py, retry.py
+│   └── utils/                    # logger.py, helpers.py, retry.py, scoring.py, duplicates.py
 ├── tests/
 ├── .env.example
 └── requirements.txt
@@ -119,16 +131,37 @@ prospecting-agent/
       | Name | Single line text |
       | Phone | Single line text |
       | Website | Single line text |
+      | Google Maps URL | URL |
+      | Address | Single line text |
       | City | Single line text |
+      | Category | Single select (HVAC, Plumbing) |
       | Rating | Number (1 decimal) |
       | Reviews | Number (integer) |
-      | Score | Number (integer) |
+      | Business Status | Single line text (OPERATIONAL / CLOSED_TEMPORARILY / CLOSED_PERMANENTLY) |
+      | Opening Hours | Long text |
+      | Score | Number (integer) — weighted blend of the five factors below, see "Scoring" |
+      | Service Need Score | Number (1 decimal) |
+      | Website Opportunity Score | Number (1 decimal) |
+      | Review Profile Score | Number (1 decimal) |
+      | Contactability Score | Number (1 decimal) |
+      | Business Activity Score | Number (1 decimal) |
+      | Reason | Long text |
       | Pain Points | Long text |
+      | Recommended Offer | Long text |
+      | Personalized First Line | Long text |
       | Personalized Message | Long text |
-      | Status | Single select (e.g. New, Contacted, Responded, Booked, Not Interested) |
+      | Status | Single select: New, Reviewed, Contacted, Follow-up, Qualified, Won, Not a fit |
+      | Duplicate Risk | Single select (Low, Medium) |
       | Date Added | Date |
+      | Last Verified | Date |
       | Source | Single select (apify, serpapi, places_api) |
       | Place ID | Single line text |
+      | Notes | Long text |
+      | Follow Up Date | Date |
+      | Owner | Single line text |
+      | Call Outcome | Single line text |
+      | Last Contacted | Date |
+      | Contact Attempts | Number (integer) |
 
       If you plan to use `--rotate-cities`, also create a table named **`Cities`**:
 
@@ -268,16 +301,24 @@ deleting it — it'll be skipped until you check it again. A dry run reads the r
 batch but does **not** stamp `Last Run At`, so you can preview what would run next
 without advancing the rotation.
 
-### Deduplication across runs
+### Deduplication and refresh across runs
 
-Already handled — no separate step needed. Every `run` (rotated or not) reads the
-whole `Leads` table's `Place ID`/`Phone` fields before writing, and skips anything
-already present. Run the same city twice, or let rotation cycle back around after a few
-weeks, and you'll never get duplicate records. What does *not* happen: a business
-already seen in a past run (even one that scored below `MIN_LEAD_SCORE` and was never
-written) still gets re-scraped and re-scored on a later run — intentionally, so scores
-stay current as ratings/reviews/websites change over time, rather than being cached
-stale forever.
+Already handled — no separate step needed. Every `run` (rotated or not) reads the whole
+`Leads` table's `Place ID`/`Phone` fields before writing. A business matching an
+existing record is **refreshed in place** (rating, reviews, website, business status,
+all five scoring factors, `Last Verified`) rather than skipped or duplicated — that's
+what makes re-running a city a real refresh, not just a way to find brand-new
+businesses. Fields you've edited yourself (`Status`, `Notes`, `Follow Up Date`, `Owner`,
+`Call Outcome`, `Last Contacted`, `Contact Attempts`) are never touched by a refresh —
+only ever changed via the lead-detail page. A business only seen once (even one that
+scored below `MIN_LEAD_SCORE` and was never written) gets re-scraped and re-scored like
+any other on a later run, so scores stay current as ratings/reviews/websites change over
+time, rather than being cached stale forever.
+
+New businesses also get a lightweight duplicate-name check against other leads already
+in the same city (normalized name match — e.g. "Acme HVAC" vs "Acme HVAC LLC") and are
+flagged `Duplicate Risk: Medium` instead of being silently treated as unrelated; this is
+a soft signal for human review, not an automatic merge or rejection.
 
 ### Exporting high-score leads
 
@@ -286,6 +327,25 @@ Pulls from everything accumulated in Airtable so far (not just the most recent r
 ```
 prospecting-agent export --min-score 7 --output leads_export.csv
 ```
+
+### Scoring
+
+Each lead's `Score` (1-10) is a weighted blend of five factors, not one opaque number:
+
+| Factor | Weight | Computed by |
+|---|---:|---|
+| Service-need signal | 40% | OpenAI — the one factor that's a genuine judgment call |
+| Website opportunity | 25% | Deterministic: no website → 10, has website → 3 |
+| Review profile | 20% | Deterministic, from `Rating` + `Reviews` |
+| Contactability | 10% | Deterministic: phone present → 10, else 0 |
+| Business activity | 5% | Deterministic: operational + hours listed → 10, else lower |
+
+Only the first factor costs an OpenAI call; the other four are pure functions of data
+already on the lead (`utils/scoring.py`), computed once at scrape time and stored
+alongside the total — so nothing needs to be recomputed live to show the breakdown on a
+lead's detail page. Leads scored before this breakdown existed keep their old flat
+`Score` and show no factor breakdown until they're refreshed (see "Deduplication and
+refresh" above).
 
 ### Chat interface
 
@@ -298,16 +358,25 @@ prospecting-agent chat
 Ask it things like *"how many leads do we have in Dallas?"*, *"show me the top 5 by
 score"*, or *"what's the phone number for Echols & Sons?"* — it answers by actually
 querying Airtable, not guessing. You can also ask it to find more leads, e.g. *"find
-plumbers in Miami"*: it proposes the search, and a **Confirm & Run** button appears in
-the app — nothing actually runs (no API spend, no scraping) until you click it. This
-two-step design is deliberate: a chat message alone should never be able to trigger a
-costly, multi-minute action on its own.
+plumbers in Miami"*: it proposes the search — naming the city/state, keywords, an
+estimated result count, and the data source — and a **Confirm & Run** button appears in
+the app; nothing actually runs (no API spend, no scraping) until you click it, and once
+it does, the app shows live progress (Finding businesses → Removing duplicates →
+Verifying contact details → Calculating lead scores → Saving results) rather than one
+long silent wait. This two-step design is deliberate: a chat message alone should never
+be able to trigger a costly, multi-minute action on its own.
 
 Picking a city from the **Browse leads** dropdown is a deliberate exception to that
 two-step rule: it always kicks off a fresh real search for that city (not just a
 replay of cached leads) with no extra confirmation click — a scope decision made
 because that panel is one click away from the source of truth (the city itself),
-unlike the chat's free-text proposals.
+unlike the chat's free-text proposals. The browse panel also supports sorting (score,
+rating, newest, last verified) and filtering by status, category, website presence, and
+minimum rating, and shows a running result count. Click any lead card to open its full
+detail page — business overview, prospecting signals (missing website, low rating, low
+review count, appears closed), the AI-suggested pitch, and an outreach workspace (call/
+copy-phone/website/map-listing links plus editable status, owner, call outcome,
+follow-up date, and notes).
 
 ## Deploy online (Render)
 
@@ -382,3 +451,22 @@ Not implemented here, but worth considering as the agent scales up:
   manual bridge into either platform in the meantime.
 - **Scope the Airtable token** — the current token has access to every base in the
   workspace; Airtable PATs can be scoped to just one base, worth tightening.
+- **Radius search** — a "within N miles of a city" filter needs latitude/longitude,
+  which isn't captured today (Apify's actor returns it; `_item_to_business` just
+  doesn't read it yet).
+- **Contact enrichment** — contact person/role, direct email, company size, and
+  emergency-availability/residential-vs-commercial flags all need a real enrichment
+  step (e.g. scraping each business's own website) that doesn't exist yet; showing
+  these fields without one would just be fabricating data.
+- **Drag-and-drop Kanban view** of the Status pipeline — the pipeline values exist and
+  are editable today (see `storage/leads.py`'s `STATUS_PIPELINE`), just not yet as a
+  board, only a dropdown on the detail page.
+- **On-demand call intelligence** — discovery questions, objection responses, and a
+  voicemail script per lead, generated on the detail page rather than baked into every
+  scored lead (keeps OpenAI spend proportional to leads actually being worked).
+- **Outreach compliance tooling** — opt-out tracking, suppression lists, consent
+  fields, and an audit log for actual email/SMS sends. Legal requirements vary by
+  channel and jurisdiction — this app doesn't send outreach itself today, so there's
+  nothing to certify as compliant yet, but that changes the moment it does.
+- **Saved searches** and **bulk actions** (multi-select export/assign/campaign) on the
+  browse panel.

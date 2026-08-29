@@ -38,7 +38,9 @@ def test_run_tool_propose_run_does_not_execute_or_touch_leads():
 
     result, proposal = agent._run_tool("propose_run", {"city": "Miami", "state": "FL"})
 
-    assert proposal == {"city": "Miami", "state": "FL"}
+    assert proposal["city"] == "Miami"
+    assert proposal["state"] == "FL"
+    assert proposal["estimated_results"] > 0
     assert "waiting" in result["status"]
 
 

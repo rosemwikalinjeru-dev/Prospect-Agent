@@ -55,6 +55,13 @@ SEARCH_LEADS_TOOL = {
                 "min_score": {"type": "integer", "description": "Minimum score, 1-10."},
                 "status": {"type": "string", "description": "Filter by status, e.g. 'New', 'Contacted'."},
                 "category": {"type": "string", "description": "Filter by trade category: 'HVAC' or 'Plumbing'."},
+                "has_website": {"type": "boolean", "description": "True for leads with a website, false for leads with none."},
+                "min_rating": {"type": "number", "description": "Minimum Google rating, e.g. 4.0."},
+                "min_reviews": {"type": "integer", "description": "Minimum number of Google reviews."},
+                "sort": {
+                    "type": "string",
+                    "description": "Sort order: 'score', 'rating', 'newest', or 'last_verified' (all descending).",
+                },
                 "limit": {"type": "integer", "description": "Max results to return (default 10)."},
             },
         },
@@ -104,10 +111,21 @@ _MAX_TOOL_ROUNDS = 5  # safety valve against a runaway tool-call loop
 
 
 class ChatAgent:
-    def __init__(self, api_key: str, model: str, leads_manager: AirtableLeadsManager):
+    def __init__(
+        self,
+        api_key: str,
+        model: str,
+        leads_manager: AirtableLeadsManager,
+        max_results_per_search: int = 60,
+        default_keyword_count: int = 1,
+    ):
         self._client = openai.OpenAI(api_key=api_key)
         self._model = model
         self._leads_manager = leads_manager
+        # Used only to build propose_run's "estimated results" figure — not a promise,
+        # just max_results_per_search x how many keywords a run with no --keyword would use.
+        self._max_results_per_search = max_results_per_search
+        self._default_keyword_count = default_keyword_count
 
     @with_retry(_RETRYABLE_ERRORS)
     def _complete(self, messages: list) -> object:
@@ -116,7 +134,8 @@ class ChatAgent:
     def _run_tool(self, name: str, args: dict) -> tuple[dict, dict | None]:
         """Execute one tool call. Returns (result_for_model, proposed_run_or_None)."""
         if name == "search_leads":
-            return {"leads": self._leads_manager.search_leads(**args)}, None
+            leads, total = self._leads_manager.search_leads(**args)
+            return {"leads": leads, "total_matched": total}, None
 
         if name == "export_leads":
             rows = self._leads_manager.read_leads(args.get("min_score", 7))
@@ -125,8 +144,15 @@ class ChatAgent:
 
         if name == "propose_run":
             # No side effect here — the UI is responsible for actually running the
-            # pipeline, and only after the user clicks Confirm.
-            return {"status": "proposed — waiting for the user to confirm in the app"}, args
+            # pipeline, and only after the user clicks Confirm. Add an estimate so the
+            # confirmation the UI shows says what will actually happen, not just "run?".
+            keyword_count = 1 if args.get("keyword") else self._default_keyword_count
+            proposal = {
+                **args,
+                "estimated_results": self._max_results_per_search * keyword_count,
+                "data_source": "Google Maps (via Apify)",
+            }
+            return {"status": "proposed — waiting for the user to confirm in the app"}, proposal
 
         return {"error": f"unknown tool {name!r}"}, None
 

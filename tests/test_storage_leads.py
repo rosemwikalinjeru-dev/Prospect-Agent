@@ -15,10 +15,17 @@ def scored_lead(make_cleaned_lead):
             phone=kwargs.pop("phone", "(214) 555-0100"),
             normalized_phone=kwargs.pop("normalized_phone", "+12145550100"),
             search_keyword=kwargs.pop("search_keyword", "HVAC repair"),
+            rating=kwargs.pop("rating", 4.2),
+            user_ratings_total=kwargs.pop("user_ratings_total", 15),
         )
         return ScoredLead(
             **lead.model_dump(),
             score=kwargs.pop("score", 8),
+            service_need_score=kwargs.pop("service_need_score", 8.0),
+            website_opportunity_score=kwargs.pop("website_opportunity_score", 3.0),
+            review_profile_score=kwargs.pop("review_profile_score", 7.0),
+            contactability_score=kwargs.pop("contactability_score", 10.0),
+            business_activity_score=kwargs.pop("business_activity_score", 6.0),
             reason="test reason",
             pain_points=["no website listed"],
             recommended_offer="a free Missed Call Revenue Audit",
@@ -33,36 +40,66 @@ def test_append_new_leads_writes_new_lead(scored_lead):
     table = FakeTable()
     manager = AirtableLeadsManager(table)
 
-    written = manager.append_new_leads([scored_lead(place_id="new_place")])
+    new_count, refreshed_count = manager.append_new_leads([scored_lead(place_id="new_place")])
 
-    assert written == 1
+    assert (new_count, refreshed_count) == (1, 0)
     assert len(table.records) == 1
     assert table.records[0]["fields"]["Name"] == "Acme HVAC"
     assert table.records[0]["fields"]["Place ID"] == "new_place"
+    assert table.records[0]["fields"]["Duplicate Risk"] == "Low"
 
 
-def test_append_new_leads_skips_duplicate_place_id(scored_lead):
-    table = FakeTable(records=[{"id": "rec1", "fields": {"Phone": "+19999999999", "Place ID": "dup_place"}}])
+def test_append_new_leads_refreshes_existing_place_id_instead_of_skipping(scored_lead):
+    table = FakeTable(
+        records=[
+            {
+                "id": "rec1",
+                "fields": {
+                    "Phone": "+19999999999",
+                    "Place ID": "dup_place",
+                    "Rating": 3.0,
+                    "Status": "Contacted",
+                    "Notes": "called twice already",
+                },
+            }
+        ]
+    )
     manager = AirtableLeadsManager(table)
 
-    written = manager.append_new_leads([scored_lead(place_id="dup_place")])
+    new_count, refreshed_count = manager.append_new_leads([scored_lead(place_id="dup_place", rating=4.5)])
 
-    assert written == 0
-    assert len(table.records) == 1  # nothing appended
+    assert (new_count, refreshed_count) == (0, 1)
+    assert len(table.records) == 1  # updated in place, not duplicated
+    assert table.records[0]["fields"]["Rating"] == 4.5  # scraped field refreshed
+    assert table.records[0]["fields"]["Status"] == "Contacted"  # human-owned field untouched
+    assert table.records[0]["fields"]["Notes"] == "called twice already"
 
 
-def test_append_new_leads_skips_duplicate_phone(scored_lead):
+def test_append_new_leads_refreshes_existing_phone_match_instead_of_skipping(scored_lead):
     table = FakeTable(records=[{"id": "rec1", "fields": {"Phone": "+12145550100", "Place ID": "some_other_place"}}])
     manager = AirtableLeadsManager(table)
 
-    written = manager.append_new_leads([scored_lead(place_id="new_place", normalized_phone="+12145550100")])
+    new_count, refreshed_count = manager.append_new_leads(
+        [scored_lead(place_id="new_place", normalized_phone="+12145550100")]
+    )
 
-    assert written == 0
+    assert (new_count, refreshed_count) == (0, 1)
+    assert len(table.records) == 1
+
+
+def test_append_new_leads_flags_duplicate_risk_for_similar_name_same_city(scored_lead):
+    table = FakeTable(records=[{"id": "rec1", "fields": {"Name": "Acme HVAC LLC", "City": "Dallas", "Place ID": "existing"}}])
+    manager = AirtableLeadsManager(table)
+
+    manager.append_new_leads([scored_lead(place_id="new_place", name="Acme HVAC")])
+
+    new_record = next(r for r in table.records if r["fields"]["Place ID"] == "new_place")
+    assert new_record["fields"]["Duplicate Risk"] == "Medium"
 
 
 def test_append_new_leads_empty_list_returns_zero():
     manager = AirtableLeadsManager(FakeTable())
-    assert manager.append_new_leads([]) == 0
+    assert manager.append_new_leads([]) == (0, 0)
 
 
 def test_update_status_found(scored_lead):
@@ -79,13 +116,40 @@ def test_update_status_not_found():
     assert manager.update_status("nonexistent", "Contacted") is False
 
 
+def test_update_fields_updates_multiple_fields_at_once(scored_lead):
+    table = FakeTable()
+    manager = AirtableLeadsManager(table)
+    manager.append_new_leads([scored_lead(place_id="target_place")])
+
+    updated = manager.update_fields("target_place", {"Notes": "left voicemail", "Follow Up Date": "2026-09-01"})
+
+    assert updated is True
+    assert table.records[0]["fields"]["Notes"] == "left voicemail"
+    assert table.records[0]["fields"]["Follow Up Date"] == "2026-09-01"
+
+
+def test_get_lead_returns_fields_by_place_id(scored_lead):
+    table = FakeTable()
+    manager = AirtableLeadsManager(table)
+    manager.append_new_leads([scored_lead(place_id="target_place")])
+
+    lead = manager.get_lead("target_place")
+
+    assert lead["Name"] == "Acme HVAC"
+
+
+def test_get_lead_returns_none_when_missing():
+    manager = AirtableLeadsManager(FakeTable())
+    assert manager.get_lead("nonexistent") is None
+
+
 def test_read_leads_filters_by_min_score(scored_lead):
     table = FakeTable()
     manager = AirtableLeadsManager(table)
     manager.append_new_leads(
         [
             scored_lead(place_id="high", score=9),
-            scored_lead(place_id="low", score=4),
+            scored_lead(place_id="low", score=4, normalized_phone="+12145550999"),
         ]
     )
 
@@ -110,9 +174,10 @@ def test_search_leads_filters_by_city_case_insensitive_substring():
     )
     manager = AirtableLeadsManager(table)
 
-    results = manager.search_leads(city="dallas")
+    results, total = manager.search_leads(city="dallas")
 
     assert [r["Name"] for r in results] == ["Dallas Co"]
+    assert total == 1
 
 
 def test_search_leads_filters_by_min_score_and_status():
@@ -125,18 +190,20 @@ def test_search_leads_filters_by_min_score_and_status():
     )
     manager = AirtableLeadsManager(table)
 
-    results = manager.search_leads(min_score=7, status="new")
+    results, total = manager.search_leads(min_score=7, status="new")
 
     assert [r["Name"] for r in results] == ["High New"]
+    assert total == 1
 
 
-def test_search_leads_respects_limit():
-    table = FakeTable(
-        records=[{"id": f"r{i}", "fields": {"Name": f"Co {i}", "Score": 8}} for i in range(5)]
-    )
+def test_search_leads_respects_limit_but_reports_full_total():
+    table = FakeTable(records=[{"id": f"r{i}", "fields": {"Name": f"Co {i}", "Score": 8}} for i in range(5)])
     manager = AirtableLeadsManager(table)
 
-    assert len(manager.search_leads(limit=2)) == 2
+    results, total = manager.search_leads(limit=2)
+
+    assert len(results) == 2
+    assert total == 5
 
 
 def test_search_leads_filters_by_category_case_insensitive():
@@ -148,9 +215,51 @@ def test_search_leads_filters_by_category_case_insensitive():
     )
     manager = AirtableLeadsManager(table)
 
-    results = manager.search_leads(category="hvac")
+    results, total = manager.search_leads(category="hvac")
 
     assert [r["Name"] for r in results] == ["Hot Air Co"]
+
+
+def test_search_leads_filters_by_has_website():
+    table = FakeTable(
+        records=[
+            {"id": "r1", "fields": {"Name": "Has Site", "Website": "https://example.com"}},
+            {"id": "r2", "fields": {"Name": "No Site", "Website": ""}},
+        ]
+    )
+    manager = AirtableLeadsManager(table)
+
+    results, _ = manager.search_leads(has_website=False)
+
+    assert [r["Name"] for r in results] == ["No Site"]
+
+
+def test_search_leads_filters_by_min_rating_and_min_reviews():
+    table = FakeTable(
+        records=[
+            {"id": "r1", "fields": {"Name": "Great Co", "Rating": 4.8, "Reviews": 100}},
+            {"id": "r2", "fields": {"Name": "Meh Co", "Rating": 3.0, "Reviews": 2}},
+        ]
+    )
+    manager = AirtableLeadsManager(table)
+
+    results, _ = manager.search_leads(min_rating=4.0, min_reviews=10)
+
+    assert [r["Name"] for r in results] == ["Great Co"]
+
+
+def test_search_leads_sorts_by_score_descending():
+    table = FakeTable(
+        records=[
+            {"id": "r1", "fields": {"Name": "Low", "Score": 5}},
+            {"id": "r2", "fields": {"Name": "High", "Score": 9}},
+        ]
+    )
+    manager = AirtableLeadsManager(table)
+
+    results, _ = manager.search_leads(sort="score")
+
+    assert [r["Name"] for r in results] == ["High", "Low"]
 
 
 def test_append_new_leads_stamps_category_from_search_keyword(scored_lead):

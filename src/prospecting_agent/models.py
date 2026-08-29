@@ -19,6 +19,7 @@ class RawBusiness(BaseModel):
     business_status: Optional[str] = None
     types: list[str] = []
     opening_hours: Optional[list[str]] = None
+    google_maps_url: Optional[str] = None
 
     # Which (city, keyword) search produced this result — useful for debugging and reporting.
     search_city: str
@@ -36,9 +37,18 @@ class CleanedLead(RawBusiness):
 
 
 class ScoredLead(CleanedLead):
-    """A CleanedLead after OpenAI scoring."""
+    """A CleanedLead after scoring. `score` is a weighted blend of the five sub-scores
+    below (see utils/scoring.py) — only `service_need_score` actually comes from OpenAI;
+    the rest are computed deterministically from data already on the lead.
+    """
 
     score: int
+    service_need_score: float
+    website_opportunity_score: float
+    review_profile_score: float
+    contactability_score: float
+    business_activity_score: float
+
     reason: str
     pain_points: list[str]
     recommended_offer: str
